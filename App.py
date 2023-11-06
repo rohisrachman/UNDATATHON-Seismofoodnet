@@ -17,10 +17,10 @@ st.set_page_config(layout="wide", page_title="Seismofoodnet", initial_sidebar_st
 st.markdown('<h1 style="color: lightblue;">Seismofoodnet</h1>', unsafe_allow_html=True)
 
 # Load your spatial data
-spasialdata = gpd.read_file("data/all_kabkota_ind.geojson")
+spasialdata = gpd.read_file("data/all_kabkota_ind.geojson" , engine='openpyxl')
 hasil1 = pd.read_excel("data/Hasil2 OK - Order JSON1.xlsx")
 datasungai = gpd.read_file("data/RIVER/IDN_water_areas_dcw.shp")
-datagempa = pd.read_excel("data/Datagempa.xlsx")
+datagempa = pd.read_excel("data/Datagempa.xlsx", engine='openpyxl')
 
 #join data
 hasilspasial = pd.merge(spasialdata, hasil1, on=['name'], how='inner')
