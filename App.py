@@ -18,7 +18,7 @@ st.markdown('<h1 style="color: lightblue;">Seismofoodnet</h1>', unsafe_allow_htm
 
 # Load your spatial data
 spasialdata = gpd.read_file("data/all_kabkota_ind.geojson")
-hasil1 = pd.read_excel("data\Hasil2 OK - Order JSON1.xlsx")
+hasil1 = pd.read_excel("data/Hasil2 OK - Order JSON1.xlsx")
 datasungai = gpd.read_file("data/RIVER/IDN_water_areas_dcw.shp")
 datagempa = pd.read_excel("data/Datagempa.xlsx")
 
