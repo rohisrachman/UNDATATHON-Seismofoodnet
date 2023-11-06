@@ -10,6 +10,7 @@ import json
 from geopy.distance import great_circle
 import matplotlib.pyplot as plt
 import plotly.express as px
+import openpyxl
 
 # Title of the Streamlit app
 st.set_page_config(layout="wide", page_title="Seismofoodnet", initial_sidebar_state="collapsed")
