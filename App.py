@@ -1,3 +1,4 @@
+import ipyleaflet
 import streamlit as st
 import geopandas as gpd
 import pandas as pd
@@ -44,19 +45,19 @@ def create_map(datagempa, datasungai, y_map, x_map):
     rivers_geojson = datasungai.to_json()
     parsed_geojson = json.loads(rivers_geojson)
 
-    river_centroids = []
+    river_centroids = []  # List to store the centroids
     for feature in parsed_geojson['features']:
         geom = shape(feature['geometry'])
         centroid = geom.centroid
-        river_centroids.append((centroid.y, centroid.x))
+        river_centroids.append((centroid.y, centroid.x))  # Append the centroid coordinates to the list
         folium.CircleMarker(
-            location=(centroid.y, centroid.x),
-            radius=0.1,
+            location=(centroid.y, centroid.x),  # (Latitude, Longitude)
+            radius=2,
             color='red',
             fill=True,
             fill_color='red'
         ).add_to(my_map2)
-
+        
     for location in locations:
         nearest_centroid = min(river_centroids, key=lambda centroid: great_circle(centroid, location).km)
         folium.PolyLine([location, nearest_centroid], color='grey', weight=1).add_to(my_map2)
@@ -74,10 +75,12 @@ def create_map(datagempa, datasungai, y_map, x_map):
     return my_map2
 
 #korelasi dan sungai
-def create_choropleth_map(hasilspasial, datasungai, y_map, x_map):
-    mymap = folium.Map(location=[y_map, x_map], zoom_start=5, tiles='CartoDB positron')
-    
+def create_choropleth_map(hasilspasial, datasungai, datagempa, y_map, x_map):
+    mymap = folium.Map(location=[y_map, x_map], zoom_start=5,tiles=None)
+    folium.TileLayer('CartoDB positron',name="Light Map",control=False).add_to(mymap)
+
     # Your scale for choropleth
+    quantiles = hasilspasial['korel'].quantile([0, 0.2, 0.4, 0.6, 0.8, 1]).tolist()
     myscale = [-1, -0.54, -0.18, 0.18, 0.54, 1]
 
     Choropleth(
@@ -99,19 +102,31 @@ def create_choropleth_map(hasilspasial, datasungai, y_map, x_map):
     highlight_function = lambda x: {'fillColor': '#000000', 'color':'#000000', 'fillOpacity': 0.50, 'weight': 0.1}
 
     # GeoJson for interactivity
-    NIL = GeoJson(
+    NIL = folium.features.GeoJson(
         hasilspasial,
         style_function=style_function,
+        control=False,
         highlight_function=highlight_function,
         tooltip=folium.features.GeoJsonTooltip(
-            fields=['prov_name', 'alt_name', 'korel'],
-            aliases=['Provinsi :', 'Kabupaten : ', 'Korelasi :'],
+            fields=['prov_name','alt_name','korel'],
+            aliases=['Provinsi :','Kabupaten : ','Korelasi :'],
             style=("background-color: white; color: #333333; font-family: arial; font-size: 12px; padding: 10px;")
         )
     )
     
+    # Create a list of coordinate pairs
+    locations = list(zip(datagempa['Latitude'],datagempa['Longitude']))
+    # Create a folium marker cluster
+    marker_cluster = MarkerCluster(locations)
+
+    # Convert your 'datasungai' GeoDataFrame to GeoJSON
+    rivers_geojson = datasungai.to_json()
+
+    # Create a folium feature group for the rivers
+    rivers_layer = folium.FeatureGroup(name='Rivers')
     # Add rivers layer
     rivers_layer = folium.FeatureGroup(name='Rivers')
+
     folium.GeoJson(
         datasungai.to_json(),
         name='Rivers',
@@ -124,6 +139,7 @@ def create_choropleth_map(hasilspasial, datasungai, y_map, x_map):
     
     # Combine all layers
     rivers_layer.add_to(mymap)
+    marker_cluster.add_to(mymap)
     mymap.add_child(NIL)
     mymap.keep_in_front(NIL)
     folium.LayerControl().add_to(mymap)
@@ -206,7 +222,7 @@ if map_type == 'earthquake point':
     map_result = create_map(datagempa, datasungai, y_map, x_map)
 else:
     # Assume create_choropleth_map returns a Folium choropleth map object for mymap
-    map_result = create_choropleth_map(hasilspasial, datasungai, y_map, x_map)
+    map_result = create_choropleth_map(hasilspasial, datasungai, datagempa, y_map, x_map)
 
 if __name__ == '__main__':
     col1, col2 = st.columns([7,3])
