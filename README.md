@@ -6,7 +6,8 @@ tidak mengambil data gempa real-time.
 
 ## Menjalankan
 
-Gunakan Python 3.13 atau 3.14. Dari folder proyek:
+Gunakan Python 3.10 atau yang lebih baru. Streamlit Community Cloud memakai
+Python 3.10 melalui `runtime.txt`. Dari folder proyek:
 
 ```sh
 python3 -m venv .venv
