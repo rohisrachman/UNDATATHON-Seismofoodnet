@@ -1,244 +1,282 @@
-import streamlit as st
-import geopandas as gpd
+"""Seismofoodnet dashboard. Run with `streamlit run App.py`."""
+
+import logging
+from html import escape
+from pathlib import Path
+
 import pandas as pd
-import folium
-from streamlit_folium import folium_static
-from folium.plugins import MarkerCluster
-from shapely.geometry import shape
-from folium.features import Choropleth, GeoJson
-import json
-from geopy.distance import great_circle
-import matplotlib.pyplot as plt
-import plotly.express as px
-import openpyxl
+import streamlit as st
+from streamlit_folium import st_folium
 
-# Title of the Streamlit app
-st.set_page_config(layout="wide", page_title="Seismofoodnet", initial_sidebar_state="collapsed")
+from seismofoodnet import (
+    build_map,
+    filter_dashboard,
+    load_data,
+    quadrant_data,
+    quadrant_figure,
+)
 
-st.markdown('<h1 style="color: lightblue;">Seismofoodnet</h1>', unsafe_allow_html=True)
+ROOT = Path(__file__).resolve().parent
+MAGNITUDES = {"Semua magnitudo": None, "≥ 3": 3.0, "≥ 4": 4.0, "≥ 5": 5.0, "≥ 6": 6.0}
 
-# Load your spatial data
-spasialdata = gpd.read_file("data/all_kabkota_ind.geojson")
-hasil1 = pd.read_excel("data/Hasil2 OK - Order JSON1.xlsx", engine='openpyxl')
-datasungai = gpd.read_file("data/RIVER/IDN_water_areas_dcw.shp")
-datagempa = pd.read_excel("data/Datagempa.xlsx", engine='openpyxl')
 
-#join data
-hasilspasial = pd.merge(spasialdata, hasil1, on=['name'], how='inner')
-hasilspasial['korel'] = hasilspasial['korel'].fillna(0)
+@st.cache_data(show_spinner="Menyiapkan peta dan data…", ttl=3600)
+def cached_data():
+    return load_data()
 
-hasilspasialsungai = gpd.overlay(datasungai, hasilspasial, how='intersection')
-sungai_layer = folium.FeatureGroup(name='Rivers')
 
-x_map=hasilspasial.centroid.x.mean()
-y_map=hasilspasial.centroid.y.mean()
+def reset_filters() -> None:
+    st.session_state["province"] = "all"
+    st.session_state["magnitude"] = "Semua magnitudo"
 
-def create_map(datagempa, datasungai, y_map, x_map):
-    my_map2 = folium.Map(location=[y_map, x_map], zoom_start=5, tiles=None)
-    folium.TileLayer('CartoDB positron', name="Light Map", control=False).add_to(my_map2)
 
-    locations = list(zip(datagempa['Latitude'], datagempa['Longitude']))
-    marker_cluster = MarkerCluster(locations).add_to(my_map2)
+def section_heading(title: str, subtitle: str) -> None:
+    st.html(
+        f'<div class="sf-section-head"><h2>{escape(title)}</h2><p>{escape(subtitle)}</p></div>'
+    )
 
-    rivers_layer = folium.FeatureGroup(name='Rivers').add_to(my_map2)
-    rivers_geojson = datasungai.to_json()
-    parsed_geojson = json.loads(rivers_geojson)
 
-    river_centroids = []  # List to store the centroids
-    for feature in parsed_geojson['features']:
-        geom = shape(feature['geometry'])
-        centroid = geom.centroid
-        river_centroids.append((centroid.y, centroid.x))  # Append the centroid coordinates to the list
-        folium.CircleMarker(
-            location=(centroid.y, centroid.x),  # (Latitude, Longitude)
-            radius=2,
-            color='red',
-            fill=True,
-            fill_color='red'
-        ).add_to(my_map2)
-        
-    for location in locations:
-        nearest_centroid = min(river_centroids, key=lambda centroid: great_circle(centroid, location).km)
-        folium.PolyLine([location, nearest_centroid], color='grey', weight=1).add_to(my_map2)
+def render_header() -> None:
+    st.html(f"<style>{(ROOT / 'assets' / 'dashboard.css').read_text()}</style>")
+    st.html("""
+        <div class="sf-topbar">
+          <div class="sf-brand"><span class="sf-brandmark" aria-hidden="true">∿</span>seismofoodnet<span style="color:#8ee79e">.</span></div>
+          <span class="sf-topnote">Indonesia · Geospatial explorer</span>
+        </div>
+    """)
 
-    folium.GeoJson(
-        rivers_geojson,
-        name='Rivers',
-        style_function=lambda feature: {
-            'color': 'blue',
-            'weight': 0.3,
-            'fillOpacity': 0,
-        }
-    ).add_to(rivers_layer)
 
-    return my_map2
-
-#korelasi dan sungai
-def create_choropleth_map(hasilspasial, datasungai, datagempa, y_map, x_map):
-    mymap = folium.Map(location=[y_map, x_map], zoom_start=5,tiles=None)
-    folium.TileLayer('CartoDB positron',name="Light Map",control=False).add_to(mymap)
-
-    # Your scale for choropleth
-    quantiles = hasilspasial['korel'].quantile([0, 0.2, 0.4, 0.6, 0.8, 1]).tolist()
-    myscale = [-1, -0.54, -0.18, 0.18, 0.54, 1]
-
-    Choropleth(
-        geo_data=hasilspasial,
-        name='Choropleth',
-        data=hasilspasial,
-        columns=['kabkot_id', 'korel'],
-        key_on="feature.properties.kabkot_id",
-        fill_color='YlGnBu',
-        threshold_scale=myscale,
-        fill_opacity=1,
-        line_opacity=0.2,
-        legend_name='Resident foreign population in %',
-        smooth_factor=0
-    ).add_to(mymap)
-
-    # Styling function for the interactive elements
-    style_function = lambda x: {'fillColor': '#ffffff', 'color':'#000000', 'fillOpacity': 0.1, 'weight': 0.1}
-    highlight_function = lambda x: {'fillColor': '#000000', 'color':'#000000', 'fillOpacity': 0.50, 'weight': 0.1}
-
-    # GeoJson for interactivity
-    NIL = folium.features.GeoJson(
-        hasilspasial,
-        style_function=style_function,
-        control=False,
-        highlight_function=highlight_function,
-        tooltip=folium.features.GeoJsonTooltip(
-            fields=['prov_name','alt_name','korel'],
-            aliases=['Provinsi :','Kabupaten : ','Korelasi :'],
-            style=("background-color: white; color: #333333; font-family: arial; font-size: 12px; padding: 10px;")
+def render_stats(regions, indicators, earthquakes) -> None:
+    cards = [
+        (
+            "GEMPA TERPILIH",
+            f"{len(earthquakes):,}".replace(",", "."),
+            "Sesuai wilayah & magnitudo",
+        ),
+        ("KABUPATEN / KOTA", str(len(regions)), "Dalam cakupan wilayah terpilih"),
+    ]
+    html = '<div class="sf-stats" aria-label="Ringkasan data terpilih">'
+    for label, value, detail in cards:
+        html += (
+            f'<div class="sf-stat"><div class="sf-stat-label">{escape(label)}</div>'
+            f'<div class="sf-stat-value">{escape(value)}</div>'
+            f'<div class="sf-stat-detail">{escape(detail)}</div></div>'
         )
+    st.html(html + "</div>")
+
+
+def render_filters(regions) -> tuple[str, str]:
+    provinces = (
+        regions.groupby("province_id")["prov_name"].first().str.title().to_dict()
     )
-    
-    # Create a list of coordinate pairs
-    locations = list(zip(datagempa['Latitude'],datagempa['Longitude']))
-    # Create a folium marker cluster
-    marker_cluster = MarkerCluster(locations)
+    with st.container(key="filters"):
+        left, middle, right = st.columns([2.5, 2, 1], vertical_alignment="bottom")
+        with left:
+            province = st.selectbox(
+                "Cakupan wilayah",
+                ["all", *sorted(provinces, key=provinces.get)],
+                format_func=lambda value: (
+                    "Seluruh Indonesia" if value == "all" else provinces[value]
+                ),
+                key="province",
+                help="Memperbarui peta, grafik, ringkasan, dan tabel.",
+            )
+        with middle:
+            magnitude = st.selectbox(
+                "Magnitudo gempa",
+                list(MAGNITUDES),
+                key="magnitude",
+                help="Hanya memfilter gempa. Nilai IRBI dan korelasi tidak berubah.",
+            )
+        with right:
+            st.button("Reset filter", on_click=reset_filters, width="stretch")
+    return province, magnitude
 
-    # Convert your 'datasungai' GeoDataFrame to GeoJSON
-    rivers_geojson = datasungai.to_json()
 
-    # Create a folium feature group for the rivers
-    rivers_layer = folium.FeatureGroup(name='Rivers')
-    # Add rivers layer
-    rivers_layer = folium.FeatureGroup(name='Rivers')
+def render_explorer(
+    regions, indicators, water, earthquakes, province, magnitude
+) -> None:
+    left, right = st.columns([1.9, 1], gap="medium")
+    with left, st.container(key="map_panel"):
+        section_heading(
+            "Eksplorasi wilayah",
+            "Pilih tampilan, lalu zoom atau arahkan kursor untuk melihat detail.",
+        )
+        map_type = st.radio(
+            "Jenis peta", ["Titik gempa", "Korelasi"], horizontal=True, key="map_type"
+        )
+        with st.expander("Pengaturan layer", expanded=False):
+            show_water = st.checkbox("Tampilkan badan air", value=True)
+            connections = st.checkbox(
+                "Hubungkan gempa ke pusat badan air",
+                value=False,
+                disabled=map_type == "Korelasi",
+                help="Garis ke pusat area terdekat, bukan jarak ke tepi sungai.",
+            )
+        if earthquakes.empty:
+            st.info(
+                "Tidak ada gempa untuk filter ini. Coba magnitudo lebih rendah atau reset filter."
+            )
+        st_folium(
+            build_map(
+                regions,
+                water,
+                earthquakes,
+                correlation=map_type == "Korelasi",
+                show_water=show_water,
+                show_connections=connections and map_type != "Korelasi",
+                show_legend=False,
+            ),
+            height=470,
+            use_container_width=True,
+            returned_objects=[],
+            key=f"map-{map_type}-{province}-{magnitude}-{show_water}-{connections}",
+        )
+        if map_type == "Korelasi":
+            st.html(
+                """<div class="sf-legend"><div class="sf-scale" aria-label="Skala korelasi dari minus satu hingga satu"><span>−1</span><div class="sf-scale-bar"></div><span>+1</span></div><span>Koefisien korelasi</span><span><i class="sf-dot missing"></i>Tidak tersedia</span></div>"""
+            )
+        else:
+            st.html(
+                """<div class="sf-legend"><span><i class="sf-dot"></i>Lokasi gempa</span><span>Angka pada kelompok = jumlah gempa</span></div>"""
+            )
+        if province != "all":
+            st.caption(
+                "Gempa disaring di dalam batas daratan provinsi. Pilih Seluruh Indonesia untuk menyertakan gempa lepas pantai."
+            )
+    with right, st.container(key="chart_panel"):
+        section_heading("Pola antardaerah", "Perbandingan median IRBI dan indikator Y.")
+        st.plotly_chart(
+            quadrant_figure(indicators),
+            width="stretch",
+            theme=None,
+            config={"displayModeBar": False, "scrollZoom": False},
+        )
+        st.html(
+            """<div class="sf-insight"><strong>Cara membaca kuadran</strong><br>Garis putus-putus membagi nilai median daerah terpilih. Titik di kanan memiliki IRBI lebih tinggi; titik di atas memiliki Y lebih tinggi.</div>"""
+        )
+        missing = int(regions.korel.isna().sum())
+        st.caption(
+            f"{missing} dari {len(regions)} wilayah tidak memiliki nilai korelasi. Data kosong tidak dianggap nol."
+        )
+        st.caption(
+            "Arahkan kursor ke titik untuk melihat nama kabupaten/kota. Filter magnitudo tidak mengubah grafik ini."
+        )
 
-    folium.GeoJson(
-        datasungai.to_json(),
-        name='Rivers',
-        style_function=lambda feature: {
-            'color': 'blue',
-            'weight': 2,
-            'fillOpacity': 0,
+
+def render_tables(regions, indicators, earthquakes) -> None:
+    section_heading(
+        "Data di balik peta",
+        "Tabel dan unduhan mengikuti filter wilayah dan magnitudo di atas.",
+    )
+    summary = quadrant_data(indicators).rename(columns={"Wilayah": "name"})
+    table = regions[["name", "prov_name", "korel"]].merge(
+        summary, on="name", how="left"
+    )
+    table = pd.DataFrame(table).rename(
+        columns={
+            "name": "Kabupaten/kota",
+            "prov_name": "Provinsi",
+            "korel": "Korelasi",
+            "IRBI": "Median IRBI",
+            "Y": "Median Y",
         }
-    ).add_to(rivers_layer)
-    
-    # Combine all layers
-    rivers_layer.add_to(mymap)
-    marker_cluster.add_to(mymap)
-    mymap.add_child(NIL)
-    mymap.keep_in_front(NIL)
-    folium.LayerControl().add_to(mymap)
-
-    return mymap
-
-def quadrant_chart(x, y, xtick_labels=None, ytick_labels=None, ax=None):
-
-    # make the data easier to work with by putting it in a dataframe
-    data = pd.DataFrame({'x': x, 'y': y})
-
-    # let the user specify their own axes
-    ax = ax if ax else plt.axes()
-
-    # calculate averages up front to avoid repeated calculations
-    y_avg = data['y'].median()
-    x_avg = data['x'].median()
-
-    # set x limits
-    adj_x = max((data['x'].max() - x_avg), (x_avg - data['x'].min())) * 1.1
-    lb_x, ub_x = (x_avg - adj_x, x_avg + adj_x)
-    ax.set_xlim(lb_x, ub_x)
-
-    # set y limits
-    adj_y = max((data['y'].max() - y_avg), (y_avg - data['y'].min())) * 1.1
-    lb_y, ub_y = (y_avg - adj_y, y_avg + adj_y)
-    ax.set_ylim(lb_y, ub_y)
-
-    # set x tick labels
-    if xtick_labels:
-        ax.set_xticks([(x_avg - adj_x / 2), (x_avg + adj_x / 2)])
-        ax.set_xticklabels(xtick_labels)
-
-    # set y tick labels
-    if ytick_labels:
-        ax.set_yticks([(y_avg - adj_y / 2), (y_avg + adj_y / 2)])
-        ax.set_yticklabels(ytick_labels, rotation='vertical', va='center')
-
-    # plot points and quadrant lines
-    ax.scatter(x=data['x'], y=data['y'], c='lightblue', edgecolor='darkblue',
-    zorder=99)
-    ax.axvline(x_avg, c='k', lw=1)
-    ax.axhline(y_avg, c='k', lw=1)
-
-x=hasil1.iloc[:,8:13].median(axis=1)
-y=hasil1.iloc[:,14:19].median(axis=1)
-
-def set_theme():
-    # Use the Streamlit theme customization to set to dark mode
-    st.markdown("""
-        <style>
-            .main { background-color: #0E1117; }
-            .reportview-container .markdown-text-container { font-family: monospace; }
-            .sidebar .sidebar-content { background-color: #00172B; }
-            .Widget>label { color: white; font-family: monospace; }
-            .st-bb { background-color: transparent; }
-            .st-at { background-color: #0E1117; }
-            .st-cj { background-color: #00172B; }
-            header { background-color: #00172B; }
-            .css-1d391kg { padding-top: 0rem; }
-        </style>
-        """, unsafe_allow_html=True)
-
-set_theme()
-
-col1, col2 = st.columns([7,3])
-with col1 :
-    st.write('<span style="color: lightblue;">Choose the map type:</span>', unsafe_allow_html=True)
-    map_type = st.selectbox(
-        "",
-        ['earthquake point', 'correlation map'],
-        key='map_type_select',
+    )
+    st.subheader("Indikator wilayah")
+    st.dataframe(table, hide_index=True, width="stretch", height=340)
+    st.download_button(
+        "Unduh indikator · CSV",
+        table.to_csv(index=False).encode("utf-8-sig"),
+        "seismofoodnet-wilayah.csv",
+        "text/csv",
+        on_click="ignore",
+    )
+    st.subheader("Katalog gempa")
+    columns = [
+        column
+        for column in [
+            "Date time",
+            "Location",
+            "Magnitude",
+            "Mag Type",
+            "Depth (km)",
+            "Latitude",
+            "Longitude",
+        ]
+        if column in earthquakes
+    ]
+    events = earthquakes[columns]
+    st.dataframe(events, hide_index=True, width="stretch", height=340)
+    st.download_button(
+        "Unduh gempa · CSV",
+        events.to_csv(index=False).encode("utf-8-sig"),
+        "seismofoodnet-gempa.csv",
+        "text/csv",
+        on_click="ignore",
     )
 
-with col2 :
-    st.markdown('<span style="color: lightblue;"> Kuadran Scatterplot</span>', unsafe_allow_html=True)
 
-if map_type == 'earthquake point':
-    # Assume create_map returns a Folium map object for mymap2
-    map_result = create_map(datagempa, datasungai, y_map, x_map)
-else:
-    # Assume create_choropleth_map returns a Folium choropleth map object for mymap
-    map_result = create_choropleth_map(hasilspasial, datasungai, datagempa, y_map, x_map)
+def render_guide() -> None:
+    section_heading(
+        "Mulai dari sebuah wilayah", "Tiga langkah untuk membaca dashboard."
+    )
+    for title, text in [
+        (
+            "1. Tentukan cakupan",
+            "Pilih provinsi untuk memfokuskan seluruh analisis. Batas magnitudo hanya menyaring gempa; gunakan Reset filter untuk kembali ke cakupan nasional.",
+        ),
+        (
+            "2. Jelajahi peta",
+            "Pilih Titik gempa untuk sebaran kejadian atau Korelasi untuk membandingkan daerah. Klik kelompok titik untuk memperbesar peta. Layer tambahan tersedia pada Pengaturan layer.",
+        ),
+        (
+            "3. Bandingkan dan unduh",
+            "Grafik menggunakan median seluruh tahun yang tersedia. Buka Data terpilih untuk melihat angka sumber dan mengunduh CSV sesuai filter.",
+        ),
+    ]:
+        st.subheader(title)
+        st.write(text)
+    with st.expander("Sumber dan batasan interpretasi", expanded=True):
+        st.write(
+            "Data berasal dari berkas historis repository: Datagempa.xlsx, Hasil2 OK - Order JSON1.xlsx, batas kabupaten/kota, dan shapefile area badan air. Dashboard bukan pemantauan gempa real-time."
+        )
+        st.write(
+            "IRBI mengikuti kolom pada spreadsheet. Y tetap menggunakan nama variabel sumber karena kamus datanya belum tersedia. Nilai korelasi disajikan dari spreadsheet, bukan dihitung ulang atau bukti sebab-akibat."
+        )
+        st.write(
+            "Pemilihan provinsi menggunakan batas geografis dalam dataset. Kejadian lepas pantai tetap muncul pada cakupan nasional. Garis badan air menunjukkan koneksi ke pusat area, bukan estimasi dampak gempa."
+        )
+        st.caption(
+            "Peta dasar © OpenStreetMap contributors. Data dan batas wilayah mengikuti arsip penelitian, bukan pembaruan administratif terkini."
+        )
 
-if __name__ == '__main__':
-    col1, col2 = st.columns([7,3])
 
-    with col1 :
-        if map_result is not None:
-            folium_static(map_result, width=830, height=445)
-    with col2:
-        # Call the main function to determine and render the appropriate map
-        quadrant_df = pd.DataFrame({
-            'IRBI': hasil1.iloc[:, 8:13].median(axis=1),
-            'Y': hasil1.iloc[:, 14:19].median(axis=1),
-        })
+def main() -> None:
+    st.set_page_config(
+        page_title="Seismofoodnet · Eksplorasi Indonesia", page_icon="🌏", layout="wide"
+    )
+    render_header()
+    try:
+        regions, indicators, water, earthquakes, rejected = cached_data()
+    except (OSError, ValueError, KeyError) as exc:
+        logging.getLogger(__name__).exception("Gagal memuat dataset")
+        st.error(f"Data tidak dapat dimuat: {exc}")
+        st.stop()
+    if rejected:
+        st.warning(f"{rejected} baris gempa dilewati karena koordinat tidak valid.")
+    province, magnitude = render_filters(regions)
+    regions, indicators, earthquakes = filter_dashboard(
+        regions, indicators, earthquakes, province, MAGNITUDES[magnitude]
+    )
+    render_stats(regions, indicators, earthquakes)
+    explorer, data, guide = st.tabs(["Eksplorasi", "Data terpilih", "Panduan"])
+    with explorer:
+        render_explorer(regions, indicators, water, earthquakes, province, magnitude)
+    with data:
+        render_tables(regions, indicators, earthquakes)
+    with guide:
+        render_guide()
 
-        # Buat plot quadrant_chart dengan Plotly Express
-        fig = px.scatter(quadrant_df, x='IRBI', y='Y', labels={'IRBI': 'IRBI', 'Y': 'Y'})
-        fig.update_xaxes(tickvals=[quadrant_df['IRBI'].min(), quadrant_df['IRBI'].max()],
-                         ticktext=['Low', 'High'], title='IRBI', tickfont=dict(size=14))
-        fig.update_yaxes(title='Y', tickfont=dict(size=14))
-        st.plotly_chart(fig, use_container_width=True)
+
+if __name__ == "__main__":
+    main()
